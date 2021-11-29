@@ -1,11 +1,13 @@
 import * as React from "react";
-
+import { createMachine, assign } from "xstate";
 import useLocalStorage from "./useLocalStorage";
+import { useMachine } from "@xstate/react";
 
 interface Item {
   id: string;
   price: number;
   quantity?: number;
+  currency?: string;
   itemTotal?: number;
   [key: string]: any;
 }
@@ -36,9 +38,10 @@ interface CartProviderState extends InitialState {
   clearCartMetadata: () => void;
   setCartMetadata: (metadata: Metadata) => void;
   updateCartMetadata: (metadata: Metadata) => void;
+  service: any;
 }
 
-export type Actions =
+export type Events =
   | { type: "SET_ITEMS"; payload: Item[] }
   | { type: "ADD_ITEM"; payload: Item }
   | { type: "REMOVE_ITEM"; id: Item["id"] }
@@ -48,8 +51,8 @@ export type Actions =
       payload: object;
     }
   | { type: "EMPTY_CART" }
-  | { type: "CLEAR_CART_META"}
-  | { type: "SET_CART_META"; payload: Metadata}
+  | { type: "CLEAR_CART_META" }
+  | { type: "SET_CART_META"; payload: Metadata }
   | { type: "UPDATE_CART_META"; payload: Metadata };
 
 export const initialState: any = {
@@ -61,12 +64,150 @@ export const initialState: any = {
   metadata: {},
 };
 
+const shoppingCartMachine = createMachine<InitialState, Events>(
+  {
+    id: "shoppingCart",
+    context: {
+      id: "",
+      items: [],
+      isEmpty: true,
+      totalItems: 0,
+      totalUniqueItems: 0,
+      cartTotal: 0,
+      metadata: {},
+    },
+    initial: "empty",
+    states: {
+      empty: {
+        on: {
+          SET_ITEMS: {
+            target: "filled",
+            actions: "setItems",
+          },
+          ADD_ITEM: {
+            target: "adding",
+            actions: "addItem",
+          },
+        },
+      },
+      adding: {
+        after: {
+          // after 1 second, transition to yellow
+          1000: { target: "filled" },
+        },
+      },
+      filled: {
+        on: {
+          EMPTY_CART: {
+            actions: "emptyCart",
+          },
+          ADD_ITEM: {
+            target: "adding",
+            actions: "addItem",
+          },
+          REMOVE_ITEM: [
+            { actions: "removeItem" },
+            // Only transition to 'empty' if the guard (cond) evaluates to true
+            {
+              target: "empty",
+              cond: "isCartEmpty",
+            },
+          ],
+          UPDATE_ITEM: {
+            actions: "updateItem",
+          },
+        },
+      },
+      checkingOut: {},
+    },
+    on: {
+      CLEAR_CART_META: {
+        actions: "clearMeta",
+      },
+      SET_CART_META: {
+        actions: "setMeta",
+      },
+      UPDATE_CART_META: {
+        actions: "updateMeta",
+      },
+      UPDATE_ITEM: {
+        actions: "updateItem",
+      },
+      REMOVE_ITEM: {
+        actions: "removeItem",
+      },
+      EMPTY_CART: {
+        actions: "emptyCart",
+      },
+    },
+  },
+  {
+    actions: {
+      setItems: assign((context, event) => {
+        if (event.type !== "SET_ITEMS") return {};
+        return generateCartState(context, event.payload);
+      }),
+      addItem: assign((context, event) => {
+        if (event.type !== "ADD_ITEM") return {};
+        const items = [...context.items, event.payload];
+        return generateCartState(context, items);
+      }),
+      updateItem: assign((context, event) => {
+        if (event.type !== "UPDATE_ITEM") return {};
+        const items = context.items.map((item: Item) => {
+          if (item.id !== event.id) return item;
+
+          return {
+            ...item,
+            ...event.payload,
+          };
+        });
+
+        return generateCartState(context, items);
+      }),
+      emptyCart: assign((_context, event) => {
+        if (event.type !== "EMPTY_CART") return {};
+        return initialState;
+      }),
+      removeItem: assign((context, event) => {
+        if (event.type !== "REMOVE_ITEM") return {};
+        const items = context.items.filter((i: Item) => i.id !== event.id);
+
+        return generateCartState(context, items);
+      }),
+      clearMeta: assign({
+        metadata: (_context, _event) => {
+          return {};
+        },
+      }),
+      setMeta: assign({
+        metadata: (_context, event) => {
+          if (event.type !== "SET_CART_META") return {};
+          return {
+            ...event.payload,
+          };
+        },
+      }),
+      updateMeta: assign({
+        metadata: (context, event) => {
+          if (event.type !== "UPDATE_CART_META") return {};
+          return {
+            ...context.metadata,
+            ...event.payload,
+          };
+        },
+      }),
+    },
+
+    guards: {
+      isCartEmpty: context => context.isEmpty,
+    },
+  }
+);
+
 const CartContext = React.createContext<CartProviderState | undefined>(
   initialState
 );
-
-export const createCartIdentifier = (len = 12) =>
-  [...Array(len)].map(() => (~~(Math.random() * 36)).toString(36)).join("");
 
 export const useCart = () => {
   const context = React.useContext(CartContext);
@@ -76,66 +217,8 @@ export const useCart = () => {
   return context;
 };
 
-function reducer(state: CartProviderState, action: Actions) {
-  switch (action.type) {
-    case "SET_ITEMS":
-      return generateCartState(state, action.payload);
-
-    case "ADD_ITEM": {
-      const items = [...state.items, action.payload];
-
-      return generateCartState(state, items);
-    }
-
-    case "UPDATE_ITEM": {
-      const items = state.items.map((item: Item) => {
-        if (item.id !== action.id) return item;
-
-        return {
-          ...item,
-          ...action.payload,
-        };
-      });
-
-      return generateCartState(state, items);
-    }
-
-    case "REMOVE_ITEM": {
-      const items = state.items.filter((i: Item) => i.id !== action.id);
-
-      return generateCartState(state, items);
-    }
-
-    case "EMPTY_CART":
-      return initialState;
-
-    case "CLEAR_CART_META":
-      return {
-        ...state,
-        metadata: {}
-      };
-
-    case "SET_CART_META":
-      return {
-        ...state,
-        metadata: {
-          ...action.payload
-        }
-      };
-
-    case "UPDATE_CART_META":
-      return {
-        ...state,
-        metadata: {
-          ...state.metadata,
-          ...action.payload,
-        },
-      };
-
-    default:
-      throw new Error("No action specified");
-  }
-}
+export const createCartIdentifier = (len = 12) =>
+  [...Array(len)].map(() => (~~(Math.random() * 36)).toString(36)).join("");
 
 const generateCartState = (state = initialState, items: Item[]) => {
   const totalUniqueItems = calculateUniqueItems(items);
@@ -192,34 +275,53 @@ export const CartProvider: React.FC<{
 }) => {
   const id = cartId ? cartId : createCartIdentifier();
 
+  //TODO: check declaration on top
+  const initstate = { ...initialState, id };
+
+  //load persisted cart state
+  //@ts-ignore
   const [savedCart, saveCart] = storage(
     cartId ? `react-use-cart-${id}` : `react-use-cart`,
-    JSON.stringify({
-      id,
-      ...initialState,
-      items: defaultItems,
-      metadata,
-    })
+    ""
   );
 
-  const [state, dispatch] = React.useReducer(reducer, JSON.parse(savedCart));
-  React.useEffect(() => {
-    saveCart(JSON.stringify(state));
-  }, [state, saveCart]);
+  //@ts-ignore
+  const [current, send, service] = useMachine(shoppingCartMachine, {
+    context: {
+      ...initstate,
+      metadata,
+      id,
+      items: defaultItems,
+    },
+    // state: JSON.parse(savedCart) ? JSON.parse(savedCart): undefined ,
+    devTools: true,
+  });
 
+  const state = current.context;
+
+  //save the state of the machine on each update
+  React.useEffect(() => {
+    const subscription = service.subscribe(state => {
+      saveCart(JSON.stringify(state));
+    });
+
+    return subscription.unsubscribe;
+  }, [service]);
+
+  // Interface functions
   const setItems = (items: Item[]) => {
-    dispatch({
+    service.send({
       type: "SET_ITEMS",
       payload: items.map(item => ({
         ...item,
-        quantity: item.quantity || 1
+        quantity: item.quantity || 1,
       })),
     });
 
     onSetItems && onSetItems(items);
   };
 
-  const addItem = (item: Item, quantity = 1) => {
+  const addItem = (item: Item, quantity: number = 1) => {
     if (!item.id) throw new Error("You must provide an `id` for items");
     if (quantity <= 0) return;
 
@@ -231,21 +333,20 @@ export const CartProvider: React.FC<{
     if (!currentItem) {
       const payload = { ...item, quantity };
 
-      dispatch({ type: "ADD_ITEM", payload });
+      service.send({ type: "ADD_ITEM", payload });
 
+      //listeners
       onItemAdd && onItemAdd(payload);
 
       return;
     }
 
+    //@ts-ignore
     const payload = { ...item, quantity: currentItem.quantity + quantity };
 
-    dispatch({
-      type: "UPDATE_ITEM",
-      id: item.id,
-      payload,
-    });
+    service.send({ type: "UPDATE_ITEM", id: item.id, payload });
 
+    //listeners
     onItemUpdate && onItemUpdate(payload);
   };
 
@@ -254,17 +355,15 @@ export const CartProvider: React.FC<{
       return;
     }
 
-    dispatch({ type: "UPDATE_ITEM", id, payload });
+    service.send({ type: "UPDATE_ITEM", id, payload });
 
     onItemUpdate && onItemUpdate(payload);
   };
 
   const updateItemQuantity = (id: Item["id"], quantity: number) => {
     if (quantity <= 0) {
+      service.send({ type: "REMOVE_ITEM", id });
       onItemRemove && onItemRemove(id);
-
-      dispatch({ type: "REMOVE_ITEM", id });
-
       return;
     }
 
@@ -274,7 +373,7 @@ export const CartProvider: React.FC<{
 
     const payload = { ...currentItem, quantity };
 
-    dispatch({
+    service.send({
       type: "UPDATE_ITEM",
       id,
       payload,
@@ -286,23 +385,22 @@ export const CartProvider: React.FC<{
   const removeItem = (id: Item["id"]) => {
     if (!id) return;
 
-    dispatch({ type: "REMOVE_ITEM", id });
-
+    service.send({ type: "REMOVE_ITEM", id });
     onItemRemove && onItemRemove(id);
   };
 
-  const emptyCart = () =>
-    dispatch({
+  const emptyCart = () => {
+    service.send({
       type: "EMPTY_CART",
     });
-
+  };
   const getItem = (id: Item["id"]) =>
     state.items.find((i: Item) => i.id === id);
 
   const inCart = (id: Item["id"]) => state.items.some((i: Item) => i.id === id);
 
   const clearCartMetadata = () => {
-    dispatch({
+    service.send({
       type: "CLEAR_CART_META",
     });
   };
@@ -310,7 +408,7 @@ export const CartProvider: React.FC<{
   const setCartMetadata = (metadata: Metadata) => {
     if (!metadata) return;
 
-    dispatch({
+    service.send({
       type: "SET_CART_META",
       payload: metadata,
     });
@@ -319,7 +417,7 @@ export const CartProvider: React.FC<{
   const updateCartMetadata = (metadata: Metadata) => {
     if (!metadata) return;
 
-    dispatch({
+    service.send({
       type: "UPDATE_CART_META",
       payload: metadata,
     });
@@ -340,6 +438,8 @@ export const CartProvider: React.FC<{
         clearCartMetadata,
         setCartMetadata,
         updateCartMetadata,
+        //xstate machine
+        service,
       }}
     >
       {children}

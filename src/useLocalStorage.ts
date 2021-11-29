@@ -2,9 +2,9 @@ import * as React from "react";
 
 export default function useLocalStorage(
   key: string,
-  initialValue: string
+  initialValue ?: string
 ): [string, (value: Function | string) => void] {
-  const [storedValue, setStoredValue] = React.useState(() => {
+  const [storedValue, setStoredValue] = <any>React.useState(() => {
     try {
       const item =
         typeof window !== "undefined" && window.localStorage.getItem(key);
